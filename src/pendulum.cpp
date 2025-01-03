@@ -135,7 +135,7 @@ std::array<State<N, M>, M> simulate(const std::array<Link, N> &link,
 template <int N, int M>
 Cost<M> compute_cost(const std::array<State<N, M>, M> &state,
                      const Eigen::Matrix<double, M, 1> &T,
-                     const Eigen::Matrix<double, N, 1> &q_target,
+                     const Eigen::Matrix<double, N, 1> &q_ref,
                      double Q_q,
                      double Q_qdot,
                      double Q_T)
@@ -143,7 +143,7 @@ Cost<M> compute_cost(const std::array<State<N, M>, M> &state,
     Cost<M> cost;
     for (int m = 0; m < M; ++m)
     {
-        const Eigen::Matrix<double, N, 1> dq = state[m].q - q_target;
+        const Eigen::Matrix<double, N, 1> dq = state[m].q - q_ref;
         cost.c += Q_q * dq.squaredNorm() / 2;
         cost.dc_dT += Q_q * dq.transpose() * state[m].dq_dT;
 
@@ -157,7 +157,10 @@ Cost<M> compute_cost(const std::array<State<N, M>, M> &state,
 }
 
 template <int M, typename CostFunction>
-LineSearchResult<M> line_search(const CostFunction &f, const Eigen::Matrix<double, M, 1> &x, const Eigen::Matrix<double, M, 1> &p, const Cost<M> &cost)
+LineSearchResult<M> line_search(const CostFunction &f,
+                                const Eigen::Matrix<double, M, 1> &x,
+                                const Eigen::Matrix<double, M, 1> &p,
+                                const Cost<M> &cost)
 {
     const double c1 = 1e-4, c2 = 0.9;
 
@@ -176,6 +179,7 @@ LineSearchResult<M> line_search(const CostFunction &f, const Eigen::Matrix<doubl
 
         if (result.cost.c <= cost.c)
         {
+            // Wolfe conditions
             const double dc_dT_p = cost.dc_dT * p;
             if ((result.cost.c <= cost.c + c1 * result.alpha * dc_dT_p) || (-result.cost.dc_dT * p <= -c2 * dc_dT_p))
             {
@@ -224,25 +228,25 @@ Eigen::Matrix<double, M, 1> bfgs(const CostFunction &f, const Eigen::Matrix<doub
 
 int main()
 {
-    const int M = 100; // Receeding horizon, number of time steps
-    const int N = 3;   // Number of links in pendulum
-
     const double g = 1;     // Gravitational acceleration
     const double dt = 0.05; // Time step
 
-    const std::array<Link, N> link{Link{.L = 1, .m = 1}, Link{.L = 1, .m = 1}, Link{.L = 1, .m = 1}};
+    const std::array link{Link{.L = 1, .m = 1}, Link{.L = 1, .m = 1}, Link{.L = 1, .m = 1}}; // Pendulum link lengths and masses
 
-    Eigen::Matrix<double, N, 1> q{0.0, 0.0, 0.0};
-    Eigen::Matrix<double, N, 1> qdot{0.0, 0.0, 0.0};
-    Eigen::Matrix<double, N, 1> q_target{0.0, 0.0, 0.0};
-    Eigen::Matrix<double, M, 1> T = Eigen::Matrix<double, M, 1>::Constant(0);
+    const int M = 100; // Receeding horizon, number of time steps
+    constexpr int N = link.size();
 
-    const auto cost_function = [&link, &q, &qdot, &q_target, &g, &dt](const Eigen::Matrix<double, M, 1> &T) -> Cost<M>
+    Eigen::Matrix<double, N, 1> q = Eigen::Matrix<double, N, 1>::Constant(0.0);     // Initial angles
+    Eigen::Matrix<double, N, 1> qdot = Eigen::Matrix<double, N, 1>::Constant(0.0);  // Initial angular velocities
+    Eigen::Matrix<double, N, 1> q_ref = Eigen::Matrix<double, N, 1>::Constant(0.0); // Initial reference angles
+    Eigen::Matrix<double, M, 1> T = Eigen::Matrix<double, M, 1>::Constant(0.0);
+
+    const auto cost_function = [&link, &q, &qdot, &q_ref, &g, &dt](const Eigen::Matrix<double, M, 1> &T) -> Cost<M>
     {
-        const double Q_q = 1;
+        const double Q_q = 1.0;
         const double Q_qdot = 0.1;
         const double Q_T = 0.1;
-        return compute_cost<N, M>(simulate<N, M>(link, q, qdot, T, g, dt), T, q_target, Q_q, Q_qdot, Q_T);
+        return compute_cost<N, M>(simulate<N, M>(link, q, qdot, T, g, dt), T, q_ref, Q_q, Q_qdot, Q_T);
     };
 
     const double tol = 1e-3;
@@ -272,6 +276,7 @@ int main()
     while (true)
     {
         const auto time_start = std::chrono::high_resolution_clock::now();
+
         std::vector<double> x_data = {0.0}, y_data = {0.0};
         for (int n = 0; n < N; ++n)
         {
@@ -290,9 +295,9 @@ int main()
         else
         {
             const int n = ch - 49;
-            if (n >= 0 && n < q_target.size())
+            if (n >= 0 && n < q_ref.size())
             {
-                q_target(n) = M_PI - q_target(n);
+                q_ref(n) = M_PI - q_ref(n);
             }
         }
 
